@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="en">
+  <html>
+    <head>
+      <title></title>
+
+      <meta charset="UTF-8" />
+      <style>
+        * {
+          margin: 0px;
+        }
+      </style>
+    </head>
+
+    <body>
+      <script type="module">
+        //first, import the Three.js modules we need:
+        import * as THREE from 'https://cdn.skypack.dev/three@0.126.0/build/three.module.js';
+        import { VRButton } from 'https://cdn.skypack.dev/three@0.126.0/examples/jsm/webxr/VRButton.js';
+        import { OrbitControls } from 'https://cdn.skypack.dev/three@0.126.0/examples/jsm/controls/OrbitControls.js';
+        import Stats from 'https://cdn.skypack.dev/three@0.126.0/examples/jsm/libs/stats.module';
+
+        import p5 from 'https://cdn.skypack.dev/p5';
+
+        /*
+          This is the function to turn an image file or a p5.js script into an object in Three.js
+
+          It returns a THREE.Group object, which you can place in the world as desired. 
+          The Group should normally be at Y=0 to have it align properly,
+          but you can position it in X and Z components (group.position.set(x, 0, z))
+          and rotate it (group.rotation.y = <radians>) to place in the world,
+          finally calling scene.add(group)
+
+          The argument to this function is a JavaScript object with one required field
+          and a few optional ones:
+
+          {
+            // REQUIRED:
+            code: <string of your p5.js code>, OR
+            image: <URL to a public image>,
+
+            // RECOMMENDED:
+            width: <optional, in meters, defaults to 1m>,
+            height: <optional, in meters, defaults to 3m>,
+            label: <optional string: label for the artwork>,
+
+            // OPTIONAL:
+            depth: <optional, in meters, defaults to 0.01m>,
+            resolution: <optional, pixels per meter, defaults to 250>
+            update: <Javascript function, which can be used to animate the object>
+          }
+
+          Watch out to not make the resolution too high, as it will slow graphics performance
+
+          The p5.js script should have a draw() function, 
+          but **no setup()** function
+          Also, it must not have a createCanvas() function
+
+          Currently, mouse, keyboard, etc. events are not supported.
+
+          Code by Haru Ji & Graham Wakefield, 2021
+        */
+        function showArtwork(options) {
+          let code = options.code;
+          let image = options.image;
+          let label = options.label;
+          // random seed:
+          let seed = options.seed;
+          let width = options.width || 5;
+          let height = options.height || 3;
+          let depth = options.depth || 0.01;
+
+          // pixels per meter
+          // don't set it too high or it can make the rendering too slow
+          let resolution = options.resolution || 250;
+          let width_pixels = width * resolution;
+          let height_pixels = height * resolution;
+
+          let update = options.update;
+
+          let artwork;
+
+          if (code) {
+            let p5instance = new p5(function (s) {
+              let create = new Function(
+                'p5',
+                'THREE',
+                `
+                let sketch = p5.createGraphics(${width_pixels}, ${height_pixels});
+                with(sketch) {
+                  texture = new THREE.CanvasTexture(sketch.canvas);
+                  // setting the random seed here to make the sketches more deterministic between viewers / visits
+                  randomSeed(${seed});
+                  ${code}
+                  draw();
+                  return {
+                    sketch,
+                    texture,
+                    draw() {
+                      draw();
+                      texture.needsUpdate = true;
+                    }
+                  }
+                }
+                `
+              );
+              s.sketch = create(s, THREE);
+            });
+            // { sketch, texture, draw }
+            artwork = p5instance.sketch;
+          } else if (options.image) {
+            const textureLoader = new THREE.TextureLoader();
+            textureLoader.crossOrigin = 'Anonymous';
+            const myTexture = (artwork = {
+              texture: textureLoader.load(options.image),
+            });
+          }
+
+          // create a Group to hold this work:
+          let group = new THREE.Group();
+
+          if (!artwork) return group;
+
+          // sketch.texture can be used in a THREE material map
+          // sketch.draw() should be called on every frame for animations
+          let canvasGeometry = new THREE.BoxGeometry(width, height, depth); //new THREE.PlaneGeometry(width, height);
+          let canvasMaterial = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            side: THREE.DoubleSide,
+            map: artwork.texture,
+          });
+          // let nullMaterial = new THREE.MeshBasicMaterial({
+          //   color: 0x666666,
+          // });
+          // let materials = [
+          //   nullMaterial,
+          //   nullMaterial,
+          //   nullMaterial,
+          //   nullMaterial,
+          //   canvasMaterial,
+          //   nullMaterial,
+          // ];
+
+          const object = new THREE.Mesh(canvasGeometry, canvasMaterial);
+          // center plane on walls
+          object.position.set(0, 2, 0);
+
+          object.userData.isCanvas = true;
+          object.userData.update = function () {
+            if (update) update(object);
+            if (artwork.draw) artwork.draw();
+          };
+          object.userData.sketch = artwork;
+          group.add(object);
+
+          if (label) {
+            let canvas = document.createElement('canvas');
+            canvas.width = 2000;
+            canvas.height = 1000;
+            let ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'white';
+
+            label.split('\n').forEach(function (line, i) {
+              if (i <= 2) {
+                let fontsize = 80;
+                ctx.font = 'bold ' + fontsize + 'px Verdana'; //Courier, Arial
+                ctx.fillText(line, 10, fontsize * 1.1 * i);
+              } else {
+                let fontsize = 70;
+                ctx.font = '' + fontsize + 'px Verdana'; //Courier, Arial
+                ctx.fillText(line, 10, fontsize * 1.1 * i);
+              }
+            });
+
+            const panel = new THREE.Mesh(
+              new THREE.PlaneGeometry(2, 1), // text panel size
+              new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                side: THREE.DoubleSide,
+                map: new THREE.CanvasTexture(canvas),
+                transparent: true,
+                opacity: 0,
+              })
+            );
+            panel.userData.isPanel = true;
+            panel.position.set(0.5, 0.6, 2.0);
+            panel.rotation.x = -Math.PI * 0.15;
+
+            group.add(panel);
+          }
+
+          return group;
+        }
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        // enable XR option in the renderer
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        document.body.appendChild(VRButton.createButton(renderer));
+
+        // arguments: vertical field of view (degrees), aspect ratio, near clip, far clip:
+        const camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.05,
+          100
+        );
+        // Z axis point out of the screen toward you; units are meters
+        camera.position.y = 1.5;
+        camera.position.z = 1.5;
+
+        const raycaster = new THREE.Raycaster();
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.target.y = 1.5;
+
+        // ensure the renderer fills the page, and the camera aspect ratio matches:
+        function resize() {
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+        }
+        // do this now and whenever the window is resized()
+        resize();
+        window.addEventListener('resize', resize, false);
+
+        // build a scene graph:
+        const scene = new THREE.Scene();
+
+        // a room
+        const cube = new THREE.Mesh(
+          new THREE.BoxGeometry(8.05, 4, 8.05), // gallery size (meters)
+          new THREE.MeshStandardMaterial({
+            side: THREE.DoubleSide,
+            color: 0x666666,
+          })
+        );
+        cube.position.y = 2;
+        scene.add(cube);
+
+        const pointlight1 = new THREE.SpotLight(0xffffff, 1, 10, Math.PI);
+        pointlight1.position.set(0, 4, 0);
+        pointlight1.castShadow = true;
+        pointlight1.shadow.camera.near = 1;
+        pointlight1.shadow.camera.far = 8;
+        //pointlight1.shadow.bias = -0.000222;
+        pointlight1.shadow.mapSize.width = 1920 / 2;
+        pointlight1.shadow.mapSize.height = 1200 / 2;
+        pointlight1.target.position.set(0, 0, 0);
+        pointlight1.target.updateMatrixWorld();
+        pointlight1.penumbra = 0.5;
+        pointlight1.decay = 1;
+        pointlight1.shadow.focus = 1;
+        scene.add(pointlight1);
+
+        // currently running sketch:
+        let currentSketch;
+
+        // add a stats view to monitor performance:
+        const stats = new Stats();
+        document.body.appendChild(stats.dom);
+
+        let t = performance.now();
+        // the function called at frame-rate to animate & render the scene:
+        function animate() {
+          // monitor our FPS:
+          stats.begin();
+
+          scene.traverse(function (o) {
+            if (o.userData.isPanel) {
+              o.material.opacity = Math.max(0.0, o.material.opacity * 0.9);
+            }
+          });
+
+          // calculate objects intersecting the picking ray
+          raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+          const intersects = raycaster.intersectObject(scene, true);
+          if (intersects.length) {
+            const target = intersects[0].object;
+
+            if (target.userData.isCanvas) {
+              currentSketch = target;
+            } else if (target.userData.isPanel) {
+              target.material.opacity = Math.min(
+                1,
+                target.material.opacity + 0.1
+              );
+            }
+          }
+
+          // run the p5.js sketches
+          if (currentSketch && currentSketch.userData.update) {
+            currentSketch.userData.update();
+          }
+
+          controls.update();
+
+          // draw the scene:
+          renderer.render(scene, camera);
+          // monitor our FPS:
+          stats.end();
+        }
+        // start!
+        renderer.setAnimationLoop(animate);
+
+        ////////////////////////////////////////////////////////////////////////////////////////
+        // INSERT ARTWORKS BELOW HERE
+        ////////////////////////////////////////////////////////////////////////////////////////
+
+        let label0 = `
+WebXR Assignment 3
+Ethan Griffin, 2021, Paint
+
+Original Code
+            `;
+
+        let code0 = `
+let x;
+let y;
+let rvalue;
+let gvalue;
+
+let x2;
+let y2;
+let rvalue2;
+let gvalue2;
+
+let x3;
+let y3;
+let rvalue3;
+let gvalue3;
+
+let x4;
+let y4;
+let rvalue4;
+let gvalue4;
+
+let bvalue;
+
+//adjustable variables
+let speed = 50;//speed of paint
+let size = 2;//size of points
+let d = 5;//distance between points
+
+
+  
+
+  background(15);//background colour
+  x = width/4;//starting locations
+  y = height/4;
+  x2 = (width/4)*3;
+  y2 = height/4;
+  x3 = width/4;
+  y3 = (height/4)*3;
+  x4 = (width/4)*3;
+  y4 = (height/4)*3;
+  
+  bvalue = random(255);
+  //RGB colour values
+  rvalue = random(255);
+  gvalue = random(255);
+  rvalue2 = random(255);
+  gvalue2 = random(255);
+  rvalue3 = random(255);
+  gvalue3 = random(255);
+  rvalue4 = random(255);
+  gvalue4 = random(255);
+  
+
+
+function mousePressed(){
+      //reset
+      background(15);
+      x = width/4;//starting locations
+      y = height/4;
+      x2 = (width/4)*3;
+      y2 = height/4;
+      x3 = width/4;
+      y3 = (height/4)*3;
+      x4 = (width/4)*3;
+      y4 = (height/4)*3;
+      bvalue = random(255);
+      gvalue = random(255);
+      rvalue2 = random(255);
+      gvalue2 = random(255);
+      rvalue3 = random(255);
+      gvalue3 = random(255);
+      rvalue4 = random(255);
+      gvalue4 = random(255);
+      
+    }
+
+function draw(){
+
+  noStroke();
+  
+  for(let i=0; i<speed; i++){
+   
+    fill(rvalue, gvalue, bvalue);
+    circle(x, y, size);
+    x = x + random(-d, d);
+    y = y + random(-d, d);
+    
+    if (x <= 0){
+      x = d;
+    }
+    if (x >= width){
+      x = width - d;
+    }
+    if (y >= height){
+      y = height - d;
+    }
+    if (y <= 0){
+      y = d;
+    }
+    
+    fill(rvalue2, gvalue2, bvalue);
+    circle(x2, y2, size);
+    x2 = x2 + random(-d, d);
+    y2 = y2 + random(-d, d);
+    
+    if (x2 <= 0){
+      x2 = d;
+    }
+    if (x2 >= width){
+      x2 = width - d;
+    }
+    if (y2 >= height){
+      y2 = height - d;
+    }
+    if (y2 <= 0){
+      y2 = d;
+    }
+    
+    fill(rvalue3, gvalue3, bvalue);
+    circle(x3, y3, size);
+    x3 = x3 + random(-d, d);
+    y3 = y3 + random(-d, d);
+    
+    if (x3 <= 0){
+      x3 = d;
+    }
+    if (x3 >= width){
+      x3 = width - d;
+    }
+    if (y3 >= height){
+      y3 = height - d;
+    }
+    if (y3 <= 0){
+      y3 = d;
+    }
+    
+    fill(rvalue4, gvalue4, bvalue);
+    circle(x4, y4, size);
+    x4 = x4 + random(-d, d);
+    y4 = y4 + random(-d, d);
+    
+    if (x4 <= 0){
+      x4 = d;
+    }
+    if (x4 >= width){
+      x4 = width - d;
+    }
+    if (y4 >= height){
+      y4 = height - d;
+    }
+    if (y4 <= 0){
+      y4 = d;
+    }
+    
+   }
+}
+      `;
+
+        let group0 = showArtwork({
+          width: 8,
+          height: 4,
+          code: code0,
+          label: label0,
+        });
+        group0.position.set(0, 0, -4);
+        scene.add(group0);
+
+        console.log(
+          group0.children[0].userData.sketch.sketch.elt.dispatchEvent(
+            new MouseEvent('click')
+          )
+        );
+
+        let label1 = `
+WebXR Assignment 3
+Ethan Griffin, 2021, Paint.1
+
+Difference in code:
+let speed = 500;//speed of paint
+let size = 5;//size of points
+
+
+            `;
+
+        let code1 = `
+        let x;
+let y;
+let rvalue;
+let gvalue;
+
+let x2;
+let y2;
+let rvalue2;
+let gvalue2;
+
+let x3;
+let y3;
+let rvalue3;
+let gvalue3;
+
+let x4;
+let y4;
+let rvalue4;
+let gvalue4;
+
+let bvalue;
+
+//adjustable variables
+let speed = 500;//speed of paint
+let size = 5;//size of points
+let d = 5;//distance between points
+
+
+  
+
+  background(15);//background colour
+  x = width/4;//starting locations
+  y = height/4;
+  x2 = (width/4)*3;
+  y2 = height/4;
+  x3 = width/4;
+  y3 = (height/4)*3;
+  x4 = (width/4)*3;
+  y4 = (height/4)*3;
+  
+  bvalue = random(255);
+  //RGB colour values
+  rvalue = random(255);
+  gvalue = random(255);
+  rvalue2 = random(255);
+  gvalue2 = random(255);
+  rvalue3 = random(255);
+  gvalue3 = random(255);
+  rvalue4 = random(255);
+  gvalue4 = random(255);
+  
+
+
+function mousePressed(){
+      //reset
+      background(15);
+      x = width/4;//starting locations
+      y = height/4;
+      x2 = (width/4)*3;
+      y2 = height/4;
+      x3 = width/4;
+      y3 = (height/4)*3;
+      x4 = (width/4)*3;
+      y4 = (height/4)*3;
+      bvalue = random(255);
+      gvalue = random(255);
+      rvalue2 = random(255);
+      gvalue2 = random(255);
+      rvalue3 = random(255);
+      gvalue3 = random(255);
+      rvalue4 = random(255);
+      gvalue4 = random(255);
+      
+    }
+
+function draw(){
+
+  noStroke();
+  
+  for(let i=0; i<speed; i++){
+   
+    fill(rvalue, gvalue, bvalue);
+    circle(x, y, size);
+    x = x + random(-d, d);
+    y = y + random(-d, d);
+    
+    if (x <= 0){
+      x = d;
+    }
+    if (x >= width){
+      x = width - d;
+    }
+    if (y >= height){
+      y = height - d;
+    }
+    if (y <= 0){
+      y = d;
+    }
+    
+    fill(rvalue2, gvalue2, bvalue);
+    circle(x2, y2, size);
+    x2 = x2 + random(-d, d);
+    y2 = y2 + random(-d, d);
+    
+    if (x2 <= 0){
+      x2 = d;
+    }
+    if (x2 >= width){
+      x2 = width - d;
+    }
+    if (y2 >= height){
+      y2 = height - d;
+    }
+    if (y2 <= 0){
+      y2 = d;
+    }
+    
+    fill(rvalue3, gvalue3, bvalue);
+    circle(x3, y3, size);
+    x3 = x3 + random(-d, d);
+    y3 = y3 + random(-d, d);
+    
+    if (x3 <= 0){
+      x3 = d;
+    }
+    if (x3 >= width){
+      x3 = width - d;
+    }
+    if (y3 >= height){
+      y3 = height - d;
+    }
+    if (y3 <= 0){
+      y3 = d;
+    }
+    
+    fill(rvalue4, gvalue4, bvalue);
+    circle(x4, y4, size);
+    x4 = x4 + random(-d, d);
+    y4 = y4 + random(-d, d);
+    
+    if (x4 <= 0){
+      x4 = d;
+    }
+    if (x4 >= width){
+      x4 = width - d;
+    }
+    if (y4 >= height){
+      y4 = height - d;
+    }
+    if (y4 <= 0){
+      y4 = d;
+    }
+    
+   }
+}
+    `;
+
+        let group1 = showArtwork({
+          width: 8,
+          height: 4,
+          code: code1,
+          label: label1,
+        });
+        group1.position.set(4, 0, 0);
+        group1.rotation.y = -Math.PI / 2;
+        scene.add(group1);
+        console.log(
+          group1.children[0].userData.sketch.sketch.elt.dispatchEvent(
+            new MouseEvent('click')
+          )
+        );
+
+        let label2 = `
+WebXR Assignment 3
+Ethan Griffin, 2021, Paint.2
+
+Difference in code:
+let speed = 50;//speed of paint
+let d = 20;//distance between points
+            `;
+
+        let code2 = `
+        let x;
+let y;
+let rvalue;
+let gvalue;
+
+let x2;
+let y2;
+let rvalue2;
+let gvalue2;
+
+let x3;
+let y3;
+let rvalue3;
+let gvalue3;
+
+let x4;
+let y4;
+let rvalue4;
+let gvalue4;
+
+let bvalue;
+
+//adjustable variables
+let speed = 50;//speed of paint
+let size = 2;//size of points
+let d = 20;//distance between points
+
+
+  
+
+  background(15);//background colour
+  x = width/4;//starting locations
+  y = height/4;
+  x2 = (width/4)*3;
+  y2 = height/4;
+  x3 = width/4;
+  y3 = (height/4)*3;
+  x4 = (width/4)*3;
+  y4 = (height/4)*3;
+  
+  bvalue = random(255);
+  //RGB colour values
+  rvalue = random(255);
+  gvalue = random(255);
+  rvalue2 = random(255);
+  gvalue2 = random(255);
+  rvalue3 = random(255);
+  gvalue3 = random(255);
+  rvalue4 = random(255);
+  gvalue4 = random(255);
+  
+
+
+function mousePressed(){
+      //reset
+      background(15);
+      x = width/4;//starting locations
+      y = height/4;
+      x2 = (width/4)*3;
+      y2 = height/4;
+      x3 = width/4;
+      y3 = (height/4)*3;
+      x4 = (width/4)*3;
+      y4 = (height/4)*3;
+      bvalue = random(255);
+      gvalue = random(255);
+      rvalue2 = random(255);
+      gvalue2 = random(255);
+      rvalue3 = random(255);
+      gvalue3 = random(255);
+      rvalue4 = random(255);
+      gvalue4 = random(255);
+      
+    }
+
+function draw(){
+
+  noStroke();
+  
+  for(let i=0; i<speed; i++){
+   
+    fill(rvalue, gvalue, bvalue);
+    circle(x, y, size);
+    x = x + random(-d, d);
+    y = y + random(-d, d);
+    
+    if (x <= 0){
+      x = d;
+    }
+    if (x >= width){
+      x = width - d;
+    }
+    if (y >= height){
+      y = height - d;
+    }
+    if (y <= 0){
+      y = d;
+    }
+    
+    fill(rvalue2, gvalue2, bvalue);
+    circle(x2, y2, size);
+    x2 = x2 + random(-d, d);
+    y2 = y2 + random(-d, d);
+    
+    if (x2 <= 0){
+      x2 = d;
+    }
+    if (x2 >= width){
+      x2 = width - d;
+    }
+    if (y2 >= height){
+      y2 = height - d;
+    }
+    if (y2 <= 0){
+      y2 = d;
+    }
+    
+    fill(rvalue3, gvalue3, bvalue);
+    circle(x3, y3, size);
+    x3 = x3 + random(-d, d);
+    y3 = y3 + random(-d, d);
+    
+    if (x3 <= 0){
+      x3 = d;
+    }
+    if (x3 >= width){
+      x3 = width - d;
+    }
+    if (y3 >= height){
+      y3 = height - d;
+    }
+    if (y3 <= 0){
+      y3 = d;
+    }
+    
+    fill(rvalue4, gvalue4, bvalue);
+    circle(x4, y4, size);
+    x4 = x4 + random(-d, d);
+    y4 = y4 + random(-d, d);
+    
+    if (x4 <= 0){
+      x4 = d;
+    }
+    if (x4 >= width){
+      x4 = width - d;
+    }
+    if (y4 >= height){
+      y4 = height - d;
+    }
+    if (y4 <= 0){
+      y4 = d;
+    }
+    
+   }
+}
+    `;
+
+        let group2 = showArtwork({
+          width: 8,
+          height: 4,
+          code: code2,
+          label: label2,
+        });
+        group2.position.set(0, 0, 4);
+        group2.rotation.y = Math.PI;
+        scene.add(group2);
+
+        let label3 = `
+
+WebXR Assignment 3
+Ethan Griffin, 2021, Paint.3
+
+Difference in code:
+let speed = 20;//speed of paint
+let size = 15;//size of points
+let d = 100;//distance between points
+
+
+            `;
+
+        let code3 = `
+        let x;
+let y;
+let rvalue;
+let gvalue;
+
+let x2;
+let y2;
+let rvalue2;
+let gvalue2;
+
+let x3;
+let y3;
+let rvalue3;
+let gvalue3;
+
+let x4;
+let y4;
+let rvalue4;
+let gvalue4;
+
+let bvalue;
+
+//adjustable variables
+let speed = 20;//speed of paint
+let size = 15;//size of points
+let d = 100;//distance between points
+
+
+  
+
+  background(15);//background colour
+  x = width/4;//starting locations
+  y = height/4;
+  x2 = (width/4)*3;
+  y2 = height/4;
+  x3 = width/4;
+  y3 = (height/4)*3;
+  x4 = (width/4)*3;
+  y4 = (height/4)*3;
+  
+  bvalue = random(255);
+  //RGB colour values
+  rvalue = random(255);
+  gvalue = random(255);
+  rvalue2 = random(255);
+  gvalue2 = random(255);
+  rvalue3 = random(255);
+  gvalue3 = random(255);
+  rvalue4 = random(255);
+  gvalue4 = random(255);
+  
+
+
+function mousePressed(){
+      //reset
+      background(15);
+      x = width/4;//starting locations
+      y = height/4;
+      x2 = (width/4)*3;
+      y2 = height/4;
+      x3 = width/4;
+      y3 = (height/4)*3;
+      x4 = (width/4)*3;
+      y4 = (height/4)*3;
+      bvalue = random(255);
+      gvalue = random(255);
+      rvalue2 = random(255);
+      gvalue2 = random(255);
+      rvalue3 = random(255);
+      gvalue3 = random(255);
+      rvalue4 = random(255);
+      gvalue4 = random(255);
+      
+    }
+
+function draw(){
+
+  noStroke();
+  
+  for(let i=0; i<speed; i++){
+   
+    fill(rvalue, gvalue, bvalue);
+    circle(x, y, size);
+    x = x + random(-d, d);
+    y = y + random(-d, d);
+    
+    if (x <= 0){
+      x = d;
+    }
+    if (x >= width){
+      x = width - d;
+    }
+    if (y >= height){
+      y = height - d;
+    }
+    if (y <= 0){
+      y = d;
+    }
+    
+    fill(rvalue2, gvalue2, bvalue);
+    circle(x2, y2, size);
+    x2 = x2 + random(-d, d);
+    y2 = y2 + random(-d, d);
+    
+    if (x2 <= 0){
+      x2 = d;
+    }
+    if (x2 >= width){
+      x2 = width - d;
+    }
+    if (y2 >= height){
+      y2 = height - d;
+    }
+    if (y2 <= 0){
+      y2 = d;
+    }
+    
+    fill(rvalue3, gvalue3, bvalue);
+    circle(x3, y3, size);
+    x3 = x3 + random(-d, d);
+    y3 = y3 + random(-d, d);
+    
+    if (x3 <= 0){
+      x3 = d;
+    }
+    if (x3 >= width){
+      x3 = width - d;
+    }
+    if (y3 >= height){
+      y3 = height - d;
+    }
+    if (y3 <= 0){
+      y3 = d;
+    }
+    
+    fill(rvalue4, gvalue4, bvalue);
+    circle(x4, y4, size);
+    x4 = x4 + random(-d, d);
+    y4 = y4 + random(-d, d);
+    
+    if (x4 <= 0){
+      x4 = d;
+    }
+    if (x4 >= width){
+      x4 = width - d;
+    }
+    if (y4 >= height){
+      y4 = height - d;
+    }
+    if (y4 <= 0){
+      y4 = d;
+    }
+    
+   }
+}
+    `;
+
+        let group3 = showArtwork({
+          width: 8,
+          height: 4,
+          code: code3,
+          label: label3,
+        });
+        group3.position.set(-4, 0, 0);
+        group3.rotation.y = Math.PI / 2;
+        scene.add(group3);
+
+        console.log(
+          group3.children[0].userData.sketch.sketch.elt.dispatchEvent(
+            new MouseEvent('click')
+          )
+        );
+      </script>
+    </body>
+  </html>
+</html>
